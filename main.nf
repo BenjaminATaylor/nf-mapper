@@ -1,46 +1,46 @@
 #!/usr/bin/env nextflow
 
 // Configurable variables
-def samplelist = '/depot/bharpur/data/popgenomes/USDAHornets/trimmomatic/hornet_IDs.txt'
-def masterdir = '/depot/bharpur/data/popgenomes/USDAHornets/raw_data'
-def genome = '/depot/bharpur/data/ref_genomes/VMAN/GCF_014083535.2_V.mandarinia_Nanaimo_p1.0_genomic.fna'
+params.samplelist = '/depot/bharpur/data/popgenomes/USDAHornets/trimmomatic/hornet_IDs.txt'
+params.rawdatadir = '/depot/bharpur/data/popgenomes/USDAHornets/raw_data'
+params.genome = '/depot/bharpur/data/ref_genomes/VMAN/GCF_014083535.2_V.mandarinia_Nanaimo_p1.0_genomic.fna'
+
+samplelist = params.samplelist   
+rawdatadir = params.rawdatadir   
+genome = params.genome
 
 // Validate inputs
 if ( samplelist.isEmpty () ) {
     exit 1, 'Please specify --samplelist with a list of expected sample IDS'
-} else if ( masterdir.isEmpty () ) {
-    exit 1, 'Please specify --masterdir with the directory containing raw data directories'
+} else if ( rawdatadir.isEmpty () ) {
+    exit 1, 'Please specify --rawdatadir with the directory containing raw data directories'
 }
-
-//for testing purposes
-println 'Hello World'
 
 //pull the list of samples and assign to an array
 File samplels = new File(samplelist)
 def samples = samplels.readLines()
-//println samples
 
 //for testing purposes, reassign samples as a single sample
 samples = [samples.get(0), samples.get(1)]
 println samples
 
 //check that each sample has a corresponding directory in master
-masterdirs = "ls $masterdir".execute().text
-def mastercontains = { it -> masterdirs.contains(it) }
+rawdatadirs = "ls $rawdatadir".execute().text
+def mastercontains = { it -> rawdatadirs.contains(it) }
 if ( !samples.every(mastercontains) ) {
     //println "Every sample in samplelist should have a corresponding folder in the master directory."
     exit 1, 'Every sample in samplelist should have a corresponding folder in the master directory.'
 }
 
 //check that each sample directory contains exactly two fastq files
-def countfastas = { it -> new File("$masterdir/$it").listFiles() .findAll { it.name =~ /(?i)fq|fastq/ } .size() }
+def countfastas = { it -> new File("$rawdatadir/$it").listFiles() .findAll { it.name =~ /(?i)fq|fastq/ } .size() }
 if ( !samples.every(it -> countfastas(it) == 2) ) {
     //println "Every sample directory should contain exactly two fastq files."
     exit 1, 'Every sample directory should contain exactly two fastq files.'
 }
 
 samples_in_trimmomatic = Channel.fromList(samples)
-masterdirchan = Channel.value( masterdir )
+rawdatadirchan = Channel.value( rawdatadir )
 genomechan = Channel.value( genome )
 
 process trimmomatic {
@@ -49,23 +49,19 @@ process trimmomatic {
 
     input:
     val sampleID from samples_in_trimmomatic
-    path masterdir from masterdirchan
+    val rawpath from rawdatadirchan
 
     output:
-    val outid into ch_out_trimmomatic
+    tuple val(outid), val(sampleID) into ch_out_trimmomatic
 
     script:
 
-    fq_1 = masterdir + '/' + sampleID + '/*_1.fq.gz'
-    fq_2 = masterdir + '/' + sampleID + '/*_2.fq.gz'
-    //fq_1_paired = '/depot/bharpur/data/popgenomes/USDAHornets/flowtest/output/trimmomatic/' + sampleID + '/' + sampleID + '_1_trim_paired.fq.gz'
-    //fq_1_unpaired = '/depot/bharpur/data/popgenomes/USDAHornets/flowtest/output/trimmomatic/' + sampleID + '/' + sampleID + '_1_trim_unpaired.fq.gz'
-    //fq_2_paired = '/depot/bharpur/data/popgenomes/USDAHornets/flowtest/output/trimmomatic/' + sampleID + '/' + sampleID + '_2_trim_paired.fq.gz'
-    //fq_2_unpaired = '/depot/bharpur/data/popgenomes/USDAHornets/flowtest/output/trimmomatic/' + sampleID + '/' + sampleID + '_2_trim_unpaired.fq.gz'
-    outdir = '/depot/bharpur/data/popgenomes/USDAHornets/flowtest/output/trimmomatic/' + sampleID
+    fq_1 = rawpath + '/' + sampleID + '/*_1.fq.gz'
+    fq_2 = rawpath + '/' + sampleID + '/*_2.fq.gz'
+    outdir = 'output/trimmomatic/' + sampleID
     outid = outdir + '/' + sampleID + ".fq.gz"
 
-    println outid
+    println fq_1
 
     //TODO: re-parameterize the trimmomatic command for optimal trimming
     """
@@ -76,7 +72,7 @@ process trimmomatic {
     $fq_1 \
     $fq_2 \
     -baseout $outid \
-    LEADING:3 TRAILING:3 SLIDINGWINDOW:4:20 MINLEN:36
+    LEADING:3 TRAILING:3 MAXINFO:36:0.7 MINLEN:36
     """
 }
 
@@ -87,21 +83,21 @@ process nextgenmap{
     clusterOptions '--ntasks 16 --time 30:00 -A bharpur'
 
     input:
-    val trimpath from ch_out_trimmomatic
-    path masterdir from masterdirchan
+    tuple val(trimpath), val(sampleID) from ch_out_trimmomatic
+    path rawdatadir from rawdatadirchan
     path genome from genomechan
 
     output: 
-    val outfile into ch_out_nextgenmap
+    tuple val(outfile), val(sampleID) into ch_out_nextgenmap
 
     script:
-    def sampID = (trimpath =~ /AGH[^\/]*/)[0]
+    //def sampID = (trimpath =~ /AGH[^\/]*/)[0]
 
     trimfile1 = trimpath.replaceAll(".fq", "_1P.fq")
     trimfile2 = trimpath.replaceAll(".fq", "_2P.fq")
 
-    outdir = '/depot/bharpur/data/popgenomes/USDAHornets/flowtest/output/nextgenmap/' + sampID
-    outfile = outdir + "/" + sampID + "_ngm_sorted.bam"
+    outdir = 'output/nextgenmap/' + sampleID
+    outfile = outdir + "/" + sampleID + "_ngm_sorted.bam"
 
     """
     echo $outfile
@@ -125,16 +121,14 @@ process qualimap{
     clusterOptions '--ntasks 16 --time 12:00:00 -A bharpur'
 
     input:
-    val ngmout from ch_out_nextgenmap
-
-    //path masterdir from masterdirchan
+    tuple val(ngmout), val(sampleID) from ch_out_nextgenmap
 
     output:
-    val outdir into ch_out_qualimap
+    tuple val(outdir), val(sampleID) into ch_out_qualimap
 
     script: 
-    def sampID = (ngmout =~ /AGH[^\/]*/)[0]
-    outdir = '/depot/bharpur/data/popgenomes/USDAHornets/flowtest/output/qualimap/' + sampID 
+    //def sampID = (ngmout =~ /AGH[^\/]*/)[0]
+    outdir = 'output/qualimap/' + sampleID 
 
     """
     echo outdir
@@ -150,13 +144,14 @@ process qualimap_prep{
     clusterOptions '--time 10:00 -A bharpur'
 
     input:
-    val qualdirs from ch_out_qualimap.collect()
+    tuple val(qualdirs), val(sampleIDs) from ch_out_qualimap.collect()
 
     output:
     file 'outframe.tsv' into ch_out_qualprep
 
     script:
-    sampIDstring = "\"" + qualdirs.collect { (it =~ /AGH[^\/]*/)[0] } + "\""
+    //sampIDstring = "\"" + qualdirs.collect { (it =~ /AGH[^\/]*/)[0] } + "\""
+    sampIDstring = "\"" + sampleIDs + "\""
     qualdirString  = "\"" + qualdirs + "\""
 
     """
@@ -182,7 +177,7 @@ process qualimap_collate{
 
     script:
     """
-    mkdir -p /depot/bharpur/data/popgenomes/USDAHornets/flowtest/output/qualimap_multiqc/
-    qualimap multi-bamqc -d $qualframe -outdir /depot/bharpur/data/popgenomes/USDAHornets/flowtest/output/qualimap_multiqc/
+    mkdir -p output/qualimap_multiqc/
+    qualimap multi-bamqc -d $qualframe -outdir output/qualimap_multiqc/
     """
 }

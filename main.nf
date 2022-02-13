@@ -4,6 +4,7 @@
 params.samplelist = '/depot/bharpur/data/popgenomes/USDAHornets/trimmomatic/hornet_IDs.txt'
 params.rawdatadir = '/depot/bharpur/data/popgenomes/USDAHornets/raw_data'
 params.genome = '/depot/bharpur/data/ref_genomes/VMAN/GCF_014083535.2_V.mandarinia_Nanaimo_p1.0_genomic.fna'
+params.publish_dir = '../../../output'
 
 samplelist = params.samplelist   
 rawdatadir = params.rawdatadir   
@@ -28,14 +29,12 @@ println samples
 rawdatadirs = "ls $rawdatadir".execute().text
 def mastercontains = { it -> rawdatadirs.contains(it) }
 if ( !samples.every(mastercontains) ) {
-    //println "Every sample in samplelist should have a corresponding folder in the master directory."
     exit 1, 'Every sample in samplelist should have a corresponding folder in the master directory.'
 }
 
 //check that each sample directory contains exactly two fastq files
 def countfastas = { it -> new File("$rawdatadir/$it").listFiles() .findAll { it.name =~ /(?i)fq|fastq/ } .size() }
 if ( !samples.every(it -> countfastas(it) == 2) ) {
-    //println "Every sample directory should contain exactly two fastq files."
     exit 1, 'Every sample directory should contain exactly two fastq files.'
 }
 
@@ -44,8 +43,10 @@ rawdatadirchan = Channel.value( rawdatadir )
 genomechan = Channel.value( genome )
 
 process trimmomatic {
-    
+
+    publishDir '${params.publish_dir}/trimmomatic', mode: 'copy'
     module 'bioinfo:trimmomatic/0.39'
+    clusterOptions '--ntasks 16 --time 30:00 -A bharpur'
 
     input:
     val sampleID from samples_in_trimmomatic
@@ -58,10 +59,8 @@ process trimmomatic {
 
     fq_1 = rawpath + '/' + sampleID + '/*_1.fq.gz'
     fq_2 = rawpath + '/' + sampleID + '/*_2.fq.gz'
-    outdir = 'output/trimmomatic/' + sampleID
+    outdir = params.publish_dir + '/trimmomatic/' + sampleID
     outid = outdir + '/' + sampleID + ".fq.gz"
-
-    println fq_1
 
     //TODO: re-parameterize the trimmomatic command for optimal trimming
     """
@@ -72,31 +71,30 @@ process trimmomatic {
     $fq_1 \
     $fq_2 \
     -baseout $outid \
+    -threads 16 \
     LEADING:3 TRAILING:3 MAXINFO:36:0.7 MINLEN:36
     """
 }
 
 process nextgenmap{
 
+    publishDir '{params.publish_dir}/nextgenmap', mode: 'copy'
     module 'bioinfo:samtools/1.12'
     memory '10 GB'
     clusterOptions '--ntasks 16 --time 30:00 -A bharpur'
 
     input:
     tuple val(trimpath), val(sampleID) from ch_out_trimmomatic
-    path rawdatadir from rawdatadirchan
     path genome from genomechan
 
     output: 
     tuple val(outfile), val(sampleID) into ch_out_nextgenmap
 
     script:
-    //def sampID = (trimpath =~ /AGH[^\/]*/)[0]
-
     trimfile1 = trimpath.replaceAll(".fq", "_1P.fq")
     trimfile2 = trimpath.replaceAll(".fq", "_2P.fq")
 
-    outdir = 'output/nextgenmap/' + sampleID
+    outdir = params.publish_dir + '/nextgenmap/' + sampleID
     outfile = outdir + "/" + sampleID + "_ngm_sorted.bam"
 
     """
@@ -117,19 +115,19 @@ process nextgenmap{
 
 process qualimap{
 
+    publishDir '{params.publish_dir}/qualimap', mode: 'copy'
     module 'bioinfo:qualimap/2.2.1'
-    clusterOptions '--ntasks 16 --time 12:00:00 -A bharpur'
+    clusterOptions '--ntasks 16 --time 6:00:00 -A bharpur'
 
     input:
     tuple val(ngmout), val(sampleID) from ch_out_nextgenmap
 
     output:
-    tuple val(outdir), val(sampleID) into ch_out_qualimap
+    val outdir into ch_out_qualimap
+    //tuple val(outdir), val(sampleID) into ch_out_qualimap
 
     script: 
-    //def sampID = (ngmout =~ /AGH[^\/]*/)[0]
-    outdir = 'output/qualimap/' + sampleID 
-
+    outdir = params.publish_dir + '/qualimap/' + sampleID 
     """
     echo outdir
     mkdir -p outdir
@@ -144,40 +142,39 @@ process qualimap_prep{
     clusterOptions '--time 10:00 -A bharpur'
 
     input:
-    tuple val(qualdirs), val(sampleIDs) from ch_out_qualimap.collect()
+    val qualdirs from ch_out_qualimap.collect()
 
     output:
     file 'outframe.tsv' into ch_out_qualprep
 
     script:
-    //sampIDstring = "\"" + qualdirs.collect { (it =~ /AGH[^\/]*/)[0] } + "\""
-    sampIDstring = "\"" + sampleIDs + "\""
     qualdirString  = "\"" + qualdirs + "\""
 
     """
     #!/apps/spack/bell/apps/r/4.1.2-gcc-9.3.0-rw7vp7m/bin/Rscript
 
-    sampIDstring = gsub("]","",gsub("[","",$sampIDstring,fixed=TRUE), fixed = T) 
-    sampIDstring = unlist(strsplit(sampIDstring, split = ","))
-
     qualdirString = gsub("]","",gsub("[","",$qualdirString,fixed=TRUE), fixed = T) 
     qualdirString = unlist(strsplit(qualdirString, split = ","))
 
-    write.table(data.frame(cbind(sampIDstring, qualdirString)),file="outframe.tsv",col.names=FALSE,row.names=FALSE,sep="\t",quote=FALSE)
+    sampIDstring = gsub(".*qualimap/","", qualdirString)
 
+    write.table(data.frame(cbind(sampIDstring, qualdirString)),file="outframe.tsv",col.names=FALSE,row.names=FALSE,sep="\t",quote=FALSE)
     """
 }
 
 process qualimap_collate{
     
+    publishDir '{params.publish_dir}/qualimap_multiqc', mode: 'copy'
     module 'bioinfo:qualimap/2.2.1'
 
     input:
     file qualframe from ch_out_qualprep
 
     script:
+    outdir = params.publish_dir + "/qualimap_multiqc/"
+
     """
-    mkdir -p output/qualimap_multiqc/
-    qualimap multi-bamqc -d $qualframe -outdir output/qualimap_multiqc/
+    mkdir -p $outdir
+    qualimap multi-bamqc -d $qualframe -outdir $outdir
     """
 }

@@ -21,10 +21,6 @@ if ( samplelist.isEmpty () ) {
 File samplels = new File(samplelist)
 def samples = samplels.readLines()
 
-//for testing purposes, reassign samples as a single sample
-samples = [samples.get(0), samples.get(1)]
-println samples
-
 //check that each sample has a corresponding directory in master
 rawdatadirs = "ls $rawdatadir".execute().text
 def mastercontains = { it -> rawdatadirs.contains(it) }
@@ -81,7 +77,7 @@ process nextgenmap{
     publishDir '{params.publish_dir}/nextgenmap', mode: 'copy'
     module 'bioinfo:samtools/1.12'
     memory '10 GB'
-    clusterOptions '--ntasks 16 --time 30:00 -A bharpur'
+    clusterOptions '--ntasks 16 --time 1:00:00 -A bharpur'
 
     input:
     tuple val(trimpath), val(sampleID) from ch_out_trimmomatic
@@ -98,11 +94,7 @@ process nextgenmap{
     outfile = outdir + "/" + sampleID + "_ngm_sorted.bam"
 
     """
-    echo $outfile
-    echo $trimfile1
-    echo TESTDONE
-
-    mkdir -p $outdir
+    rm -rf $outdir; mkdir -p $outdir
 
     ngm -r $genome \
     --qry1 $trimfile1 --qry2 $trimfile2 \
@@ -124,13 +116,12 @@ process qualimap{
 
     output:
     val outdir into ch_out_qualimap
-    //tuple val(outdir), val(sampleID) into ch_out_qualimap
 
     script: 
     outdir = params.publish_dir + '/qualimap/' + sampleID 
     """
-    echo outdir
     mkdir -p outdir
+    unset DISPLAY
 
     qualimap bamqc -bam $ngmout --java-mem-size=2G -outdir $outdir
     """

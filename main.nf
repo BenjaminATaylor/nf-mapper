@@ -37,7 +37,7 @@ process trimmomatic {
 
     publishDir '${params.publish_dir}/trimmomatic', mode: 'copy'
     module 'bioinfo:trimmomatic/0.39'
-    clusterOptions '--ntasks 16 --time 30:00 -A bharpur'
+    clusterOptions '--ntasks 16 --time 1:00:00 -A bharpur'
 
     input:
     val sampleID from samples_in_trimmomatic
@@ -72,7 +72,7 @@ process nextgenmap{
     publishDir '{params.publish_dir}/nextgenmap', mode: 'copy'
     module 'bioinfo:samtools/1.12'
     memory '10 GB'
-    clusterOptions '--ntasks 16 --time 1:00:00 -A bharpur'
+    clusterOptions '--ntasks 16 --time 2:00:00 -A bharpur'
 
     input:
     tuple val(trimpath), val(sampleID) from ch_out_trimmomatic

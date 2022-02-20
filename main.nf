@@ -1,37 +1,32 @@
 #!/usr/bin/env nextflow
 
 // Configurable variables
-params.samplelist = '/depot/bharpur/data/popgenomes/USDAHornets/trimmomatic/hornet_IDs.txt'
-params.rawdatadir = '/depot/bharpur/data/popgenomes/USDAHornets/raw_data'
-params.genome = '/depot/bharpur/data/ref_genomes/VMAN/GCF_014083535.2_V.mandarinia_Nanaimo_p1.0_genomic.fna'
 params.publish_dir = '../../../output'
-
 samplelist = params.samplelist   
-rawdatadir = params.rawdatadir   
+rawdatadir =  "realpath $params.rawdatadir".execute().text.trim()
 genome = params.genome
 
 // Validate inputs
 if ( samplelist.isEmpty () ) {
     exit 1, 'Please specify --samplelist with a list of expected sample IDS'
 } else if ( rawdatadir.isEmpty () ) {
-    exit 1, 'Please specify --rawdatadir with the directory containing raw data directories'
+    exit 1, 'Please specify --rawdatadir with the directory containing raw data'
 }
 
 //pull the list of samples and assign to an array
 File samplels = new File(samplelist)
 def samples = samplels.readLines()
-
-//check that each sample has a corresponding directory in master
-rawdatadirs = "ls $rawdatadir".execute().text
-def mastercontains = { it -> rawdatadirs.contains(it) }
-if ( !samples.every(mastercontains) ) {
-    exit 1, 'Every sample in samplelist should have a corresponding folder in the master directory.'
+//list files in the raw data directory
+File rawls = new File(rawdatadir)
+rawfiles = rawls.listFiles()
+//check that each sample ID corresponds to exactly two input fastas
+def countFastas(ID) {
+    def pattern = ID + "_[1-2].fq.gz"
+    def matcher = rawfiles =~ pattern
+    return matcher.count
 }
-
-//check that each sample directory contains exactly two fastq files
-def countfastas = { it -> new File("$rawdatadir/$it").listFiles() .findAll { it.name =~ /(?i)fq|fastq/ } .size() }
-if ( !samples.every(it -> countfastas(it) == 2) ) {
-    exit 1, 'Every sample directory should contain exactly two fastq files.'
+if ( !samples.every(it -> countFastas(it) == 2) ) {
+    exit 1, 'Every supplied sample ID should correspond to exactly two fastq files.'
 }
 
 samples_in_trimmomatic = Channel.fromList(samples)
@@ -53,8 +48,8 @@ process trimmomatic {
 
     script:
 
-    fq_1 = rawpath + '/' + sampleID + '/*_1.fq.gz'
-    fq_2 = rawpath + '/' + sampleID + '/*_2.fq.gz'
+    fq_1 = rawpath + '/' + sampleID + '_1.fq.gz'
+    fq_2 = rawpath + '/' + sampleID + '_2.fq.gz'
     outdir = params.publish_dir + '/trimmomatic/' + sampleID
     outid = outdir + '/' + sampleID + ".fq.gz"
 
@@ -169,3 +164,4 @@ process qualimap_collate{
     qualimap multi-bamqc -d $qualframe -outdir $outdir
     """
 }
+
